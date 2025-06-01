@@ -14,6 +14,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 from .cache import get_cache, set_cache # Import cache functions
+import cloudscraper
+import json
+from bs4 import BeautifulSoup
 
 # Add this after the imports
 import os
@@ -379,6 +382,103 @@ def fetch_myntra_products_fallback(query, num_results=2):
     
     return top_products
 
+def fetch_myntra_products_cloudscraper(query, num_results=2):
+    """Fetches product details from Myntra using cloudscraper"""
+    url_query = query.replace(' ', '-')
+    raw_query = query.replace(' ', '%20')
+    url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
+    print(f"[DEBUG] 🌐 Cloudscraper fetching Myntra results for: '{query}' from {url}")
+    
+    top_products = []
+    
+    try:
+        # Create a cloudscraper session
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False
+            }
+        )
+        
+        # Set headers to mimic a real browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        print(f"[DEBUG] 🚀 Sending request to Myntra...")
+        response = scraper.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        html_content = response.text
+        print(f"[DEBUG] 📄 Response received, content length: {len(html_content)} characters")
+        
+        # Parse HTML with BeautifulSoup
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Method 1: Try to find product data in script tags
+        script_tags = soup.find_all('script', type='application/json')
+        for script in script_tags:
+            try:
+                data = json.loads(script.string)
+                if isinstance(data, dict) and 'products' in data:
+                    products = data['products']
+                    for product in products[:num_results]:
+                        if 'name' in product and 'image' in product:
+                            top_products.append({
+                                'name': product['name'],
+                                'image_url': product['image']
+                            })
+                    break
+            except:
+                continue
+        
+        # Method 2: If no products found in script tags, try direct HTML parsing
+        if not top_products:
+            product_elements = soup.select('[data-testid="product-base"]')
+            if not product_elements:
+                product_elements = soup.select('.product-base')
+            
+            for element in product_elements[:num_results]:
+                try:
+                    name_element = element.select_one('h3, h4, .product-product, [data-testid="product-name"]')
+                    img_element = element.select_one('img')
+                    
+                    if name_element and img_element:
+                        name = name_element.text.strip()
+                        img_url = img_element.get('src') or img_element.get('data-src')
+                        
+                        if img_url:
+                            if not img_url.startswith('http'):
+                                img_url = f"https://assets.myntassets.com/{img_url.lstrip('/')}"
+                            
+                            top_products.append({
+                                'name': name,
+                                'image_url': img_url
+                            })
+                except Exception as e:
+                    print(f"[DEBUG] ⚠️ Error extracting product: {e}")
+                    continue
+        
+        print(f"[DEBUG] ✅ Cloudscraper found {len(top_products)} products for '{query}'")
+        
+    except Exception as e:
+        print(f"[DEBUG] ❌ Error in cloudscraper fetch for '{query}': {e}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+    
+    return top_products
+
 def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
     """Processes recommendations and fetches top 2 Myntra products for each item."""
     global redis_client
@@ -518,11 +618,12 @@ def get_recommendations_data(recommendations_data, gender="unisex"):
                             print(f"[DEBUG] ✅ Cache HIT for '{search_query}' - found {len(products)} products")
                         else:
                             print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
-                            # Try Selenium first, fallback to requests if it fails
-                            products = fetch_myntra_products_selenium(search_query, num_results=2)
+                            # Try cloudscraper first
+                            products = fetch_myntra_products_cloudscraper(search_query, num_results=2)
                             
+                            # If cloudscraper fails, try fallback method
                             if not products:
-                                print(f"[DEBUG] 🔄 Selenium failed, trying fallback method")
+                                print(f"[DEBUG] 🔄 Cloudscraper failed, trying fallback method")
                                 products = fetch_myntra_products_fallback(search_query, num_results=2)
                             
                             # Cache the results if found
@@ -533,11 +634,12 @@ def get_recommendations_data(recommendations_data, gender="unisex"):
                                 print(f"[DEBUG] ⚠️ No products to cache for '{search_query}'")
                     else:
                         print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
-                        # Try Selenium first, fallback to requests if it fails
-                        products = fetch_myntra_products_selenium(search_query, num_results=2)
+                        # Try cloudscraper first
+                        products = fetch_myntra_products_cloudscraper(search_query, num_results=2)
                         
+                        # If cloudscraper fails, try fallback method
                         if not products:
-                            print(f"[DEBUG] 🔄 Selenium failed, trying fallback method")
+                            print(f"[DEBUG] 🔄 Cloudscraper failed, trying fallback method")
                             products = fetch_myntra_products_fallback(search_query, num_results=2)
                         
                     # Add products to item result
