@@ -13,6 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 from .cache import get_cache, set_cache # Import cache functions
+import random
 
 # Add this after the imports
 import os
@@ -48,6 +49,86 @@ def set_redis_client(client):
     print(f"[Background Task] Redis client set: {redis_client is not None}")
 
 def get_selenium_driver():
+    """Create and configure a Chrome WebDriver instance"""
+    chrome_options = Options()
+    chrome_options.add_argument('--headless=new') # Use new headless mode
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    # Use remote debugging with unique port to avoid conflicts
+    port = random.randint(9222, 9999)
+    chrome_options.add_argument(f'--remote-debugging-port={port}')
+    
+    # Specify a unique user data directory
+    # Option 1: Using tempfile (recommended for proper cleanup by OS or manually)
+    # user_data_path = tempfile.mkdtemp(prefix='chrome_user_data_') 
+    # Option 2: Simpler random path (ensure /tmp is writable and cleaned periodically)
+    user_data_path = f"/tmp/chrome_user_data_{random.randint(10000, 99999)}"
+    chrome_options.add_argument(f'--user-data-dir={user_data_path}')
+    print(f"[DEBUG] 👤 Using unique user data directory: {user_data_path}")
+
+    # Disable automation detection
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # Performance and stability options
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    chrome_options.add_argument('--disable-features=TranslateUI')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument('--disable-logging') # Reduces log verbosity, but might hide some issues
+    chrome_options.add_argument('--log-level=3') # Further reduce logging
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--ignore-ssl-errors')
+    chrome_options.add_argument('--ignore-certificate-errors-spki-list')
+    
+    # Memory options
+    chrome_options.add_argument('--memory-pressure-off')
+    # chrome_options.add_argument('--max_old_space_size=4096') # This is a V8 engine flag, usually for Node.js.
+                                                            # For Chrome, consider resource limits at the OS level.
+
+    # Explicitly set Chrome binary location
+    chrome_options.binary_location = "/usr/bin/google-chrome-stable"
+    
+    driver = None # Initialize driver to None
+    try:
+        print(f"[DEBUG] 🔧 Setting up ChromeDriver...")
+        
+        # Use system-installed ChromeDriver
+        driver_path = "/usr/local/bin/chromedriver"
+        print(f"[DEBUG] ✅ Using ChromeDriver at: {driver_path}")
+        
+        # Create service with driver path
+        service = Service(executable_path=driver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Execute script to remove automation flags
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        print(f"[DEBUG] ✅ Selenium driver created successfully")
+        return driver
+        
+    except Exception as e:
+        print(f"[DEBUG] ❌ Failed to create Selenium driver: {e}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        # If driver was partially created and an error occurred, try to quit it.
+        if driver:
+            try:
+                driver.quit()
+            except Exception as q_err:
+                print(f"[DEBUG] ⚠️ Error quitting driver after creation failure: {q_err}")
+        return None
+
+# (The rest of your script remains the same)
+# ...
+
     """Create and configure a Chrome WebDriver instance"""
     chrome_options = Options()
     chrome_options.add_argument('--headless=new')  # Use new headless mode
