@@ -6,6 +6,7 @@ import os
 import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -59,17 +60,35 @@ def get_selenium_driver():
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
+    # Explicitly set Chrome binary location
+    chrome_options.binary_location = "/usr/bin/google-chrome-stable"
+    
     try:
-        # Auto-install ChromeDriver
-        driver_path = ChromeDriverManager().install()
-        driver = webdriver.Chrome(driver_path, options=chrome_options)
+        print(f"[DEBUG] 🔧 Setting up ChromeDriver...")
+        
+        # Try to auto-install ChromeDriver
+        try:
+            driver_path = ChromeDriverManager().install()
+            print(f"[DEBUG] ✅ ChromeDriver installed at: {driver_path}")
+        except Exception as e:
+            print(f"[DEBUG] ⚠️ ChromeDriver auto-install failed: {e}")
+            # Fall back to system chromedriver if available
+            driver_path = "chromedriver"
+        
+        # Create service with driver path
+        service = Service(executable_path=driver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
         
         # Execute script to remove automation flags
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
+        print(f"[DEBUG] ✅ Selenium driver created successfully")
         return driver
+        
     except Exception as e:
         print(f"[DEBUG] ❌ Failed to create Selenium driver: {e}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         return None
 
 def fetch_myntra_products_selenium(query, num_results=2):
