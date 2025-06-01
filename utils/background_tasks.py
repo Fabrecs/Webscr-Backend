@@ -60,6 +60,21 @@ def get_selenium_driver():
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
+    # Add unique user data directory to avoid conflicts
+    import tempfile
+    import uuid
+    temp_dir = tempfile.gettempdir()
+    unique_id = str(uuid.uuid4())
+    user_data_dir = f"{temp_dir}/chrome_user_data_{unique_id}"
+    chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
+    
+    # Additional stability options
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    
     # Explicitly set Chrome binary location
     chrome_options.binary_location = "/usr/bin/google-chrome-stable"
     
@@ -76,6 +91,9 @@ def get_selenium_driver():
         
         # Execute script to remove automation flags
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # Store the temp directory for cleanup
+        driver._temp_user_data_dir = user_data_dir
         
         print(f"[DEBUG] ✅ Selenium driver created successfully")
         return driver
@@ -234,8 +252,21 @@ def fetch_myntra_products_selenium(query, num_results=2):
     finally:
         if driver:
             try:
+                # Get temp directory before closing
+                temp_dir = getattr(driver, '_temp_user_data_dir', None)
+                
                 driver.quit()
                 print(f"[DEBUG] 🔌 Selenium driver closed")
+                
+                # Clean up temporary user data directory
+                if temp_dir:
+                    import shutil
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        print(f"[DEBUG] 🧹 Cleaned up temp directory: {temp_dir}")
+                    except Exception as e:
+                        print(f"[DEBUG] ⚠️ Failed to clean temp directory: {e}")
+                        
             except Exception as e:
                 print(f"[DEBUG] ⚠️ Error closing driver: {e}")
     
