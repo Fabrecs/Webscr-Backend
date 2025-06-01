@@ -18,25 +18,87 @@ def fetch_myntra_products(query, num_results=2):
     url_query = query.replace(' ', '-')
     raw_query = query.replace(' ', '%20')
     url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
-    # print(f"[Background Task] Fetching Myntra results for: '{query}' from {url}")
+    print(f"[DEBUG] Fetching Myntra results for: '{query}' from {url}")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+        "Referer": "https://www.google.com/"
     }
     
     top_products = []
 
     try:
+        print(f"[DEBUG] Making request to: {url}")
+        print(f"[DEBUG] Request headers: {headers}")
+        
         response = requests.get(url, headers=headers, timeout=10) # Added timeout
+        
+        print(f"[DEBUG] Response status code: {response.status_code}")
+        print(f"[DEBUG] Response headers: {dict(response.headers)}")
+        print(f"[DEBUG] Response URL (after redirects): {response.url}")
+        
         response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
 
         html_content = response.text
+        print(f"[DEBUG] Response content length: {len(html_content)} characters")
+        
+        # Log first 500 characters of HTML content
+        print(f"[DEBUG] First 500 chars of HTML: {html_content[:500]}")
+        
+        # Check if we're getting blocked/redirected
+        if "access denied" in html_content.lower() or "blocked" in html_content.lower():
+            print(f"[DEBUG] ⚠️ Possible blocking detected in HTML content")
+        
+        if "captcha" in html_content.lower():
+            print(f"[DEBUG] ⚠️ CAPTCHA detected in HTML content")
 
+        # Look for specific Myntra indicators
+        if "myntra" not in html_content.lower():
+            print(f"[DEBUG] ⚠️ 'myntra' not found in HTML content - possible redirect/block")
+        
+        # Debug regex patterns
+        print(f"[DEBUG] Searching for product names with pattern: '\"productName\":\"(.*?)\"'")
         product_names = re.findall(r'"productName":"(.*?)"', html_content)
+        print(f"[DEBUG] Found {len(product_names)} product names: {product_names[:5]}")  # Show first 5
+        
+        print(f"[DEBUG] Searching for image URLs with pattern: '\"searchImage\":\"(.*?)\"'")
         image_urls = re.findall(r'"searchImage":"(.*?)"', html_content)
+        print(f"[DEBUG] Found {len(image_urls)} image URLs: {image_urls[:5]}")  # Show first 5
+
+        # Alternative regex patterns to try
+        if not product_names:
+            print(f"[DEBUG] Trying alternative product name patterns...")
+            alt_product_names = re.findall(r'"name":"(.*?)"', html_content)
+            print(f"[DEBUG] Alternative pattern found {len(alt_product_names)} names: {alt_product_names[:5]}")
+            
+            title_pattern = re.findall(r'"title":"(.*?)"', html_content)
+            print(f"[DEBUG] Title pattern found {len(title_pattern)} titles: {title_pattern[:5]}")
+
+        if not image_urls:
+            print(f"[DEBUG] Trying alternative image URL patterns...")
+            alt_images = re.findall(r'"image":"(.*?)"', html_content)
+            print(f"[DEBUG] Alternative image pattern found {len(alt_images)} images: {alt_images[:5]}")
+            
+            src_pattern = re.findall(r'"src":"(.*?)"', html_content)
+            print(f"[DEBUG] Src pattern found {len(src_pattern)} sources: {src_pattern[:5]}")
 
         if not product_names or not image_urls:
-            print(f"[Background Task] No product names or images found for '{query}'.")
+            print(f"[DEBUG] ❌ No product names or images found for '{query}'.")
+            # Save a snippet of HTML for debugging
+            with open(f"/tmp/myntra_debug_{query.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
+                f.write(html_content[:10000])  # Save first 10k chars
+            print(f"[DEBUG] Saved HTML snippet to /tmp/myntra_debug_{query.replace(' ', '_')}.html")
             return top_products
 
         count = 0
@@ -44,22 +106,35 @@ def fetch_myntra_products(query, num_results=2):
             if count >= num_results:
                 break
                 
+            print(f"[DEBUG] Processing product {count + 1}: '{product_name}' with image: '{img_url}'")
+            
             decoded_name = html.unescape(product_name).encode('utf-8').decode('unicode_escape')
             decoded_url = html.unescape(img_url).encode('utf-8').decode('unicode_escape')
+
+            print(f"[DEBUG] Decoded name: '{decoded_name}'")
+            print(f"[DEBUG] Decoded URL: '{decoded_url}'")
 
             # Construct full image URL if necessary
             if decoded_url.startswith('http'):
                 full_url = decoded_url
             else:
                 full_url = f"https://assets.myntassets.com/{decoded_url.lstrip('/')}"
+            
+            print(f"[DEBUG] Final image URL: '{full_url}'")
                 
             top_products.append({"name": decoded_name, "image_url": full_url})
             count += 1
+        
+        print(f"[DEBUG] ✅ Successfully found {len(top_products)} products for '{query}'")
             
     except requests.exceptions.RequestException as e:
-        print(f"[Background Task] Error fetching Myntra page for '{query}': {e}")
+        print(f"[DEBUG] ❌ RequestException for '{query}': {e}")
+        print(f"[DEBUG] Exception type: {type(e).__name__}")
     except Exception as e:
-        print(f"[Background Task] An unexpected error occurred during Myntra fetch for '{query}': {e}")
+        print(f"[DEBUG] ❌ Unexpected error for '{query}': {e}")
+        print(f"[DEBUG] Exception type: {type(e).__name__}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         
     return top_products
 
@@ -142,27 +217,34 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
     global redis_client
     results = {}
     
+    print(f"[DEBUG] Starting get_recommendations_data with gender: {gender}")
+    print(f"[DEBUG] Redis client available: {redis_client is not None}")
+    
     if not recommendations_data or 'recommendations' not in recommendations_data:
-        print("[get_recommendations_data] No recommendations data found to process.")
+        print("[DEBUG] ❌ No recommendations data found to process.")
         return results
 
     parsed_recommendations = recommendations_data['recommendations']
+    print(f"[DEBUG] Processing {len(parsed_recommendations)} categories")
 
     for category, items in parsed_recommendations.items():
         if not isinstance(items, list):
-            print(f"[get_recommendations_data] Skipping category '{category}' as its value is not a list.")
+            print(f"[DEBUG] ⚠️ Skipping category '{category}' as its value is not a list.")
             continue
             
         # Initialize category in results
         results[category] = []
+        print(f"[DEBUG] Processing category '{category}' with {len(items)} items")
         
-        for item in items:
+        for item_idx, item in enumerate(items):
             try:
                 clothing_type = item.get('Clothing Type')
                 color_str = item.get('Color')
+                
+                print(f"[DEBUG] Item {item_idx + 1}/{len(items)}: {item}")
 
                 if not clothing_type or not color_str:
-                    print(f"[get_recommendations_data] Skipping item due to missing 'Clothing Type' or 'Color': {item}")
+                    print(f"[DEBUG] ⚠️ Skipping item due to missing 'Clothing Type' or 'Color': {item}")
                     continue
 
                 # Create item result with original recommendation
@@ -173,48 +255,68 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
                 
                 # Split colors if 'or' is present, otherwise treat as a single color
                 colors = [c.strip() for c in re.split(r'\s+or\s+', color_str, flags=re.IGNORECASE)]
+                print(f"[DEBUG] Split colors: {colors}")
 
-                for color in colors:
+                for color_idx, color in enumerate(colors):
                     if color.lower() in clothing_type.lower():
                         search_query = f"{clothing_type} for {gender}"
                     else:
                         search_query = f"{color} {clothing_type} for {gender}"
+                    
+                    print(f"[DEBUG] Color {color_idx + 1}/{len(colors)}: Processing search query: '{search_query}'")
 
                     # Check Cache First
                     cache_key = f"myntra:{search_query}"
                     
                     if redis_client:
+                        print(f"[DEBUG] Checking cache for key: '{cache_key}'")
                         cached_products = get_cache(redis_client, cache_key)
                         
                         if cached_products is not None:
                             # Use cached results directly
                             products = cached_products
+                            print(f"[DEBUG] ✅ Cache HIT for '{search_query}' - found {len(products)} products")
                         else:
+                            print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
                             # Fetch from Myntra if not in cache
                             products = fetch_myntra_products(search_query, num_results=2)
                             # Cache the results if found
                             if products:
+                                print(f"[DEBUG] 💾 Caching {len(products)} products for '{search_query}'")
                                 set_cache(redis_client, cache_key, products)
+                            else:
+                                print(f"[DEBUG] ⚠️ No products to cache for '{search_query}'")
                     else:
+                        print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
                         # Fetch without cache
                         products = fetch_myntra_products(search_query, num_results=2)
                         
                     # Add products to item result
                     if products:
+                        print(f"[DEBUG] ✅ Adding {len(products)} products to results for '{search_query}'")
                         for product in products:
                             item_result['products'].append({
                                 'search_query': search_query,
                                 'product': product
                             })
                     else:
-                        print(f"[get_recommendations_data] No results found for '{search_query}'.")
+                        print(f"[DEBUG] ❌ No results found for '{search_query}'.")
                 
                 # Add item result to category results if products were found
                 if item_result['products']:
                     results[category].append(item_result)
+                    print(f"[DEBUG] ✅ Added item to category '{category}' with {len(item_result['products'])} products")
+                else:
+                    print(f"[DEBUG] ⚠️ Skipping item - no products found")
                         
             except Exception as e:
-                print(f"[get_recommendations_data] Error processing item {item}: {e}")
+                print(f"[DEBUG] ❌ Error processing item {item}: {e}")
+                import traceback
+                print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+    
+    print(f"[DEBUG] ✅ Finished processing. Found results for {len(results)} categories:")
+    for cat, items in results.items():
+        print(f"[DEBUG]   - {cat}: {len(items)} items with products")
     
     return results
 
