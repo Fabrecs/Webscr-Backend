@@ -67,7 +67,6 @@ def get_selenium_driver():
     
     # Create a temporary directory for Chrome
     temp_dir = tempfile.mkdtemp()
-    chrome_options.add_argument(f'--user-data-dir={temp_dir}')
     print(f"[DEBUG] 📁 Using temporary Chrome directory: {temp_dir}")
     
     # Use remote debugging with unique port to avoid conflicts
