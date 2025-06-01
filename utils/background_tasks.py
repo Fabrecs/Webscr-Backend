@@ -50,6 +50,13 @@ def set_redis_client(client):
 
 def get_selenium_driver():
     """Create and configure a Chrome WebDriver instance"""
+    # First, try to kill any existing Chrome processes
+    try:
+        os.system("pkill -f chrome")
+        time.sleep(1)  # Give it a moment to clean up
+    except Exception as e:
+        print(f"[DEBUG] ⚠️ Error cleaning up Chrome processes: {e}")
+
     chrome_options = Options()
     chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
@@ -59,7 +66,6 @@ def get_selenium_driver():
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
     # Explicitly disable user data directory
-    chrome_options.add_argument(f'--user-data-dir={tempfile.mkdtemp()}')
     chrome_options.add_argument('--no-first-run')
     chrome_options.add_argument('--no-default-browser-check')
     chrome_options.add_argument('--disable-extensions')
