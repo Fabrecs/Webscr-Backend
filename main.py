@@ -52,13 +52,7 @@ app.include_router(webscraping_urls.router, prefix="/products", tags=["Products"
 
 @app.get("/health")
 async def health():
-    try:
-        response = requests.get(f"https://{os.getenv('ML_API_URL')}/health/",
-                                headers={"Authorization": f"Bearer {os.getenv('ML_API_KEY')}"})
-        response.raise_for_status()
-        return {"status": "ok"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn
