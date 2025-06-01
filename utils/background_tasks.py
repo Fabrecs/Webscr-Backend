@@ -66,14 +66,9 @@ def get_selenium_driver():
     try:
         print(f"[DEBUG] 🔧 Setting up ChromeDriver...")
         
-        # Try to auto-install ChromeDriver
-        try:
-            driver_path = ChromeDriverManager().install()
-            print(f"[DEBUG] ✅ ChromeDriver installed at: {driver_path}")
-        except Exception as e:
-            print(f"[DEBUG] ⚠️ ChromeDriver auto-install failed: {e}")
-            # Fall back to system chromedriver if available
-            driver_path = "chromedriver"
+        # Use system-installed ChromeDriver
+        driver_path = "/usr/local/bin/chromedriver"
+        print(f"[DEBUG] ✅ Using ChromeDriver at: {driver_path}")
         
         # Create service with driver path
         service = Service(executable_path=driver_path)
