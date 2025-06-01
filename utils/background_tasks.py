@@ -17,6 +17,8 @@ from .cache import get_cache, set_cache # Import cache functions
 import cloudscraper
 import json
 from bs4 import BeautifulSoup
+import asyncio
+from playwright.async_api import async_playwright
 
 # Add this after the imports
 import os
@@ -549,6 +551,184 @@ def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
 
     print("[Background Task] Finished processing recommendations.")
 
+async def fetch_myntra_products_playwright(query, num_results=2):
+    """Fetches product details from Myntra using Playwright"""
+    url_query = query.replace(' ', '-')
+    raw_query = query.replace(' ', '%20')
+    url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
+    print(f"[DEBUG] 🌐 Playwright fetching Myntra results for: '{query}' from {url}")
+    
+    top_products = []
+    
+    try:
+        async with async_playwright() as p:
+            # Launch browser with stealth mode
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-gpu',
+                    '--disable-infobars',
+                    '--window-size=1920,1080',
+                    '--start-maximized',
+                    '--disable-notifications',
+                    '--disable-extensions',
+                    '--disable-popup-blocking',
+                    '--disable-blink-features',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                ]
+            )
+            
+            # Create a new context with specific viewport and user agent
+            context = await browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                java_script_enabled=True,
+                has_touch=False,
+                is_mobile=False,
+                locale='en-US',
+                timezone_id='America/New_York',
+                geolocation={'latitude': 40.7128, 'longitude': -74.0060},
+                permissions=['geolocation'],
+                extra_http_headers={
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0'
+                }
+            )
+            
+            # Create a new page
+            page = await context.new_page()
+            
+            # Add script to remove webdriver flags
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+            """)
+            
+            print(f"[DEBUG] 🚀 Loading page with Playwright...")
+            await page.goto(url, wait_until='networkidle', timeout=30000)
+            
+            # Wait for content to load
+            await page.wait_for_load_state('domcontentloaded')
+            await asyncio.sleep(3)  # Additional wait for dynamic content
+            
+            # Get page content
+            html_content = await page.content()
+            print(f"[DEBUG] 📄 Page loaded, content length: {len(html_content)} characters")
+            
+            # Check for blocking indicators
+            blocking_indicators = [
+                "site maintenance", "oops! something went wrong", 
+                "access denied", "blocked", "captcha", "security check"
+            ]
+            
+            html_lower = html_content.lower()
+            for indicator in blocking_indicators:
+                if indicator in html_lower:
+                    print(f"[DEBUG] ⚠️ Blocking detected: '{indicator}' found in response")
+                    return top_products
+            
+            # Method 1: Try to extract products from page
+            try:
+                # Wait for product elements
+                await page.wait_for_selector('[data-testid="product-base"], .product-base', timeout=5000)
+                
+                # Get all product elements
+                product_elements = await page.query_selector_all('[data-testid="product-base"], .product-base')
+                
+                for element in product_elements[:num_results]:
+                    try:
+                        # Get product name
+                        name_element = await element.query_selector('h3, h4, .product-product, [data-testid="product-name"]')
+                        name = await name_element.text_content() if name_element else None
+                        
+                        # Get product image
+                        img_element = await element.query_selector('img')
+                        img_url = await img_element.get_attribute('src') if img_element else None
+                        
+                        if name and img_url:
+                            if not img_url.startswith('http'):
+                                img_url = f"https://assets.myntassets.com/{img_url.lstrip('/')}"
+                            
+                            top_products.append({
+                                'name': name.strip(),
+                                'image_url': img_url
+                            })
+                            print(f"[DEBUG] ✅ Added product: {name}")
+                    except Exception as e:
+                        print(f"[DEBUG] ⚠️ Error extracting product: {e}")
+                        continue
+                
+            except Exception as e:
+                print(f"[DEBUG] ⚠️ Error in product extraction: {e}")
+            
+            # Method 2: Try to extract from JSON data
+            if not top_products:
+                try:
+                    # Look for JSON data in script tags
+                    script_content = await page.evaluate("""
+                        () => {
+                            const scripts = document.querySelectorAll('script[type="application/json"]');
+                            for (const script of scripts) {
+                                try {
+                                    const data = JSON.parse(script.textContent);
+                                    if (data && data.products) {
+                                        return JSON.stringify(data.products);
+                                    }
+                                } catch (e) {}
+                            }
+                            return null;
+                        }
+                    """)
+                    
+                    if script_content:
+                        products = json.loads(script_content)
+                        for product in products[:num_results]:
+                            if 'name' in product and 'image' in product:
+                                top_products.append({
+                                    'name': product['name'],
+                                    'image_url': product['image']
+                                })
+                                print(f"[DEBUG] ✅ Added product from JSON: {product['name']}")
+                except Exception as e:
+                    print(f"[DEBUG] ⚠️ Error extracting JSON data: {e}")
+            
+            # Close browser
+            await browser.close()
+            
+            print(f"[DEBUG] ✅ Playwright found {len(top_products)} products for '{query}'")
+            
+    except Exception as e:
+        print(f"[DEBUG] ❌ Error in Playwright fetch for '{query}': {e}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+    
+    return top_products
+
+def fetch_myntra_products_playwright_sync(query, num_results=2):
+    """Synchronous wrapper for the async Playwright function"""
+    return asyncio.run(fetch_myntra_products_playwright(query, num_results))
+
 def get_recommendations_data(recommendations_data, gender="unisex"):
     """
     Processes recommendations and fetches Myntra products for each item.
@@ -618,12 +798,12 @@ def get_recommendations_data(recommendations_data, gender="unisex"):
                             print(f"[DEBUG] ✅ Cache HIT for '{search_query}' - found {len(products)} products")
                         else:
                             print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
-                            # Try cloudscraper first
-                            products = fetch_myntra_products_cloudscraper(search_query, num_results=2)
+                            # Try Playwright first
+                            products = fetch_myntra_products_playwright_sync(search_query, num_results=2)
                             
-                            # If cloudscraper fails, try fallback method
+                            # If Playwright fails, try fallback method
                             if not products:
-                                print(f"[DEBUG] 🔄 Cloudscraper failed, trying fallback method")
+                                print(f"[DEBUG] 🔄 Playwright failed, trying fallback method")
                                 products = fetch_myntra_products_fallback(search_query, num_results=2)
                             
                             # Cache the results if found
@@ -634,12 +814,12 @@ def get_recommendations_data(recommendations_data, gender="unisex"):
                                 print(f"[DEBUG] ⚠️ No products to cache for '{search_query}'")
                     else:
                         print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
-                        # Try cloudscraper first
-                        products = fetch_myntra_products_cloudscraper(search_query, num_results=2)
+                        # Try Playwright first
+                        products = fetch_myntra_products_playwright_sync(search_query, num_results=2)
                         
-                        # If cloudscraper fails, try fallback method
+                        # If Playwright fails, try fallback method
                         if not products:
-                            print(f"[DEBUG] 🔄 Cloudscraper failed, trying fallback method")
+                            print(f"[DEBUG] 🔄 Playwright failed, trying fallback method")
                             products = fetch_myntra_products_fallback(search_query, num_results=2)
                         
                     # Add products to item result
