@@ -50,32 +50,25 @@ def set_redis_client(client):
 
 def get_selenium_driver():
     """Create and configure a Chrome WebDriver instance"""
-    # First, try to kill any existing Chrome processes
+    # First, try to kill any existing Chrome processes using killall (more widely available than pkill)
     try:
-        os.system("pkill -f chrome")
+        os.system("killall -9 chrome chrome-driver 2>/dev/null")
         time.sleep(1)  # Give it a moment to clean up
     except Exception as e:
         print(f"[DEBUG] ⚠️ Error cleaning up Chrome processes: {e}")
 
     chrome_options = Options()
-    chrome_options.add_argument('--headless=new')  # Use new headless mode
+    chrome_options.add_argument('--headless')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
-    # Explicitly disable user data directory
-    chrome_options.add_argument('--no-first-run')
-    chrome_options.add_argument('--no-default-browser-check')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-popup-blocking')
-    chrome_options.add_argument('--disable-infobars')
-    chrome_options.add_argument('--disable-notifications')
-    chrome_options.add_argument('--disable-save-password-bubble')
-    chrome_options.add_argument('--disable-translate')
-    chrome_options.add_argument('--disable-features=TranslateUI')
-    chrome_options.add_argument('--disable-features=site-per-process')
+    # Create a temporary directory for Chrome
+    temp_dir = tempfile.mkdtemp()
+    chrome_options.add_argument(f'--user-data-dir={temp_dir}')
+    print(f"[DEBUG] 📁 Using temporary Chrome directory: {temp_dir}")
     
     # Use remote debugging with unique port to avoid conflicts
     port = random.randint(9222, 9999)
@@ -130,6 +123,12 @@ def get_selenium_driver():
                 driver.quit()
             except Exception as q_err:
                 print(f"[DEBUG] ⚠️ Error quitting driver after creation failure: {q_err}")
+        # Clean up temp directory on failure
+        try:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as cleanup_err:
+            print(f"[DEBUG] ⚠️ Error cleaning up temp directory: {cleanup_err}")
         return None
     
 def fetch_myntra_products_selenium(query, num_results=2):
@@ -141,12 +140,16 @@ def fetch_myntra_products_selenium(query, num_results=2):
     
     driver = None
     top_products = []
+    temp_dir = None
     
     try:
         driver = get_selenium_driver()
         if not driver:
             print(f"[DEBUG] ❌ Could not create Selenium driver")
             return top_products
+        
+        # Get the temp directory from the driver's options
+        temp_dir = driver.options.arguments[driver.options.arguments.index('--user-data-dir') + 1]
         
         print(f"[DEBUG] 🚀 Loading page with Selenium...")
         driver.get(url)
@@ -284,6 +287,15 @@ def fetch_myntra_products_selenium(query, num_results=2):
                 print(f"[DEBUG] 🔌 Selenium driver closed")
             except Exception as e:
                 print(f"[DEBUG] ⚠️ Error closing driver: {e}")
+        
+        # Clean up temp directory
+        if temp_dir:
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                print(f"[DEBUG] 🧹 Cleaned up temporary directory: {temp_dir}")
+            except Exception as cleanup_err:
+                print(f"[DEBUG] ⚠️ Error cleaning up temp directory: {cleanup_err}")
     
     return top_products
 
