@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pillow
+requests
+python-dotenv
+pydantic
+nest-asyncio
+python-multipart
+boto3
+httpx
+starlette
+redis
+regex
