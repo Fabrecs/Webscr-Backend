@@ -798,8 +798,119 @@ def get_recommendations_data(recommendations_data, gender="unisex"):
                             print(f"[DEBUG] ✅ Cache HIT for '{search_query}' - found {len(products)} products")
                         else:
                             print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
+                            # Try fallback method first since it's synchronous
+                            products = fetch_myntra_products_fallback(search_query, num_results=2)
+                            
+                            # Cache the results if found
+                            if products:
+                                print(f"[DEBUG] 💾 Caching {len(products)} products for '{search_query}'")
+                                set_cache(redis_client, cache_key, products)
+                            else:
+                                print(f"[DEBUG] ⚠️ No products to cache for '{search_query}'")
+                    else:
+                        print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
+                        # Try fallback method since it's synchronous
+                        products = fetch_myntra_products_fallback(search_query, num_results=2)
+                        
+                    # Add products to item result
+                    if products:
+                        print(f"[DEBUG] ✅ Adding {len(products)} products to results for '{search_query}'")
+                        for product in products:
+                            item_result['products'].append({
+                                'search_query': search_query,
+                                'product': product
+                            })
+                    else:
+                        print(f"[DEBUG] ❌ No results found for '{search_query}'.")
+                
+                # Add item result to category results if products were found
+                if item_result['products']:
+                    results[category].append(item_result)
+                    print(f"[DEBUG] ✅ Added item to category '{category}' with {len(item_result['products'])} products")
+                else:
+                    print(f"[DEBUG] ⚠️ Skipping item - no products found")
+                        
+            except Exception as e:
+                print(f"[DEBUG] ❌ Error processing item {item}: {e}")
+                import traceback
+                print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+    
+    print(f"[DEBUG] ✅ Finished processing. Found results for {len(results)} categories:")
+    for cat, items in results.items():
+        print(f"[DEBUG]   - {cat}: {len(items)} items with products")
+    
+    return results
+
+async def get_recommendations_data_async(recommendations_data, gender="unisex"):
+    """
+    Async version of get_recommendations_data that uses Playwright
+    """
+    global redis_client
+    results = {}
+    
+    print(f"[DEBUG] Starting async get_recommendations_data with gender: {gender}")
+    print(f"[DEBUG] Redis client available: {redis_client is not None}")
+    
+    if not recommendations_data or 'recommendations' not in recommendations_data:
+        print("[DEBUG] ❌ No recommendations data found to process.")
+        return results
+
+    parsed_recommendations = recommendations_data['recommendations']
+    print(f"[DEBUG] Processing {len(parsed_recommendations)} categories")
+
+    for category, items in parsed_recommendations.items():
+        if not isinstance(items, list):
+            print(f"[DEBUG] ⚠️ Skipping category '{category}' as its value is not a list.")
+            continue
+            
+        # Initialize category in results
+        results[category] = []
+        print(f"[DEBUG] Processing category '{category}' with {len(items)} items")
+        
+        for item_idx, item in enumerate(items):
+            try:
+                clothing_type = item.get('Clothing Type')
+                color_str = item.get('Color')
+                
+                print(f"[DEBUG] Item {item_idx + 1}/{len(items)}: {item}")
+
+                if not clothing_type or not color_str:
+                    print(f"[DEBUG] ⚠️ Skipping item due to missing 'Clothing Type' or 'Color': {item}")
+                    continue
+
+                # Create item result with original recommendation
+                item_result = {
+                    'recommendation': item.copy(),
+                    'products': []
+                }
+                
+                # Split colors if 'or' is present, otherwise treat as a single color
+                colors = [c.strip() for c in re.split(r'\s+or\s+', color_str, flags=re.IGNORECASE)]
+                print(f"[DEBUG] Split colors: {colors}")
+
+                for color_idx, color in enumerate(colors):
+                    if color.lower() in clothing_type.lower():
+                        search_query = f"{clothing_type} for {gender}"
+                    else:
+                        search_query = f"{color} {clothing_type} for {gender}"
+                    
+                    print(f"[DEBUG] Color {color_idx + 1}/{len(colors)}: Processing search query: '{search_query}'")
+
+                    # Check Cache First
+                    cache_key = f"myntra:{search_query}"
+                    
+                    if redis_client:
+                        print(f"[DEBUG] Checking cache for key: '{cache_key}'")
+                        cached_products = get_cache(redis_client, cache_key)
+                        
+                        if cached_products is not None:
+                            # Use cached results directly
+                            products = cached_products
+                            print(f"[DEBUG] ✅ Cache HIT for '{search_query}' - found {len(products)} products")
+                        else:
+                            print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
                             # Try Playwright first
-                            products = fetch_myntra_products_playwright_sync(search_query, num_results=2)
+                            products = await fetch_myntra_products_playwright(search_query, num_results=2)
                             
                             # If Playwright fails, try fallback method
                             if not products:
@@ -815,7 +926,7 @@ def get_recommendations_data(recommendations_data, gender="unisex"):
                     else:
                         print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
                         # Try Playwright first
-                        products = fetch_myntra_products_playwright_sync(search_query, num_results=2)
+                        products = await fetch_myntra_products_playwright(search_query, num_results=2)
                         
                         # If Playwright fails, try fallback method
                         if not products:

@@ -1,13 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from api import signed_urls, webscraping_urls
 from dotenv import load_dotenv
 from utils.cache import get_redis_client
-from utils.background_tasks import set_redis_client
+from utils.background_tasks import set_redis_client, get_recommendations_data_async
 from contextlib import asynccontextmanager
 import redis
 import requests
 import os
+from pydantic import BaseModel
+from typing import Dict, List, Optional
 
 
 load_dotenv()
@@ -70,6 +72,18 @@ async def readiness():
         return {"status": "ready", "redis": "connected"}
     except Exception as e:
         return {"status": "not_ready", "redis": "disconnected", "error": str(e)}
+
+class RecommendationRequest(BaseModel):
+    recommendations: Dict[str, List[Dict[str, str]]]
+    gender: Optional[str] = "unisex"
+
+@app.post("/products/references")
+async def get_product_references(request: RecommendationRequest):
+    try:
+        results = await get_recommendations_data_async(request.recommendations, request.gender)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
