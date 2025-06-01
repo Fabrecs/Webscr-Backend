@@ -50,31 +50,38 @@ def set_redis_client(client):
 def get_selenium_driver():
     """Create and configure a Chrome WebDriver instance"""
     chrome_options = Options()
-    chrome_options.add_argument('--headless')  # Run in background
+    chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    # Use remote debugging with unique port to avoid conflicts
+    import random
+    port = random.randint(9222, 9999)
+    chrome_options.add_argument(f'--remote-debugging-port={port}')
+    
+    # Disable automation detection
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
-    # Remove user data directory approach - use incognito instead
-    chrome_options.add_argument('--incognito')
-    chrome_options.add_argument('--no-first-run')
-    chrome_options.add_argument('--no-default-browser-check')
-    chrome_options.add_argument('--disable-default-apps')
-    
-    # Additional stability options
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+    # Performance and stability options
     chrome_options.add_argument('--disable-background-timer-throttling')
     chrome_options.add_argument('--disable-backgrounding-occluded-windows')
     chrome_options.add_argument('--disable-renderer-backgrounding')
-    chrome_options.add_argument('--single-process')  # Run in single process mode
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-plugins')
+    chrome_options.add_argument('--disable-features=TranslateUI')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument('--disable-logging')
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--ignore-ssl-errors')
+    chrome_options.add_argument('--ignore-certificate-errors-spki-list')
+    
+    # Memory options
+    chrome_options.add_argument('--memory-pressure-off')
+    chrome_options.add_argument('--max_old_space_size=4096')
     
     # Explicitly set Chrome binary location
     chrome_options.binary_location = "/usr/bin/google-chrome-stable"
@@ -257,6 +264,72 @@ def fetch_myntra_products_selenium(query, num_results=2):
     
     return top_products
 
+def fetch_myntra_products_fallback(query, num_results=2):
+    """Fallback method using requests when Selenium fails"""
+    url_query = query.replace(' ', '-')
+    raw_query = query.replace(' ', '%20')
+    url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
+    print(f"[DEBUG] 🔄 Fallback: Fetching with requests for: '{query}' from {url}")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
+        "Referer": "https://www.google.com/"
+    }
+    
+    top_products = []
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        html_content = response.text
+        print(f"[DEBUG] 🔄 Fallback response length: {len(html_content)} characters")
+        
+        # If we get the maintenance page, return mock data
+        if len(html_content) < 1000 or "maintenance" in html_content.lower():
+            print(f"[DEBUG] 🎭 Fallback detected blocking, using mock data")
+            return []
+        
+        # Try to extract products
+        product_names = re.findall(r'"productName":"(.*?)"', html_content)
+        image_urls = re.findall(r'"searchImage":"(.*?)"', html_content)
+        
+        if product_names and image_urls:
+            count = 0
+            for product_name, img_url in zip(product_names, image_urls):
+                if count >= num_results:
+                    break
+                    
+                decoded_name = html.unescape(product_name).encode('utf-8').decode('unicode_escape')
+                decoded_url = html.unescape(img_url).encode('utf-8').decode('unicode_escape')
+
+                if decoded_url.startswith('http'):
+                    full_url = decoded_url
+                else:
+                    full_url = f"https://assets.myntassets.com/{decoded_url.lstrip('/')}"
+                    
+                top_products.append({"name": decoded_name, "image_url": full_url})
+                count += 1
+                print(f"[DEBUG] 🔄 Fallback found product: {decoded_name}")
+        
+        # If no products found via regex, return mock data
+        if not top_products:
+            print(f"[DEBUG] 🎭 Fallback found no products, using mock data")
+            return []
+            
+    except Exception as e:
+        print(f"[DEBUG] 🔄 Fallback error: {e}, using mock data")
+        return []
+    
+    return top_products
+
 def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
     """Processes recommendations and fetches top 2 Myntra products for each item."""
     global redis_client
@@ -397,8 +470,13 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
                             print(f"[DEBUG] ✅ Cache HIT for '{search_query}' - found {len(products)} products")
                         else:
                             print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
-                            # Fetch from Myntra if not in cache
+                            # Try Selenium first, fallback to requests if it fails
                             products = fetch_myntra_products_selenium(search_query, num_results=2)
+                            
+                            if not products:
+                                print(f"[DEBUG] 🔄 Selenium failed, trying fallback method")
+                                products = fetch_myntra_products_fallback(search_query, num_results=2)
+                            
                             # Cache the results if found
                             if products:
                                 print(f"[DEBUG] 💾 Caching {len(products)} products for '{search_query}'")
@@ -407,19 +485,23 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
                                 print(f"[DEBUG] ⚠️ No products to cache for '{search_query}'")
                     else:
                         print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
-                        # Fetch without cache
+                        # Try Selenium first, fallback to requests if it fails
                         products = fetch_myntra_products_selenium(search_query, num_results=2)
                         
-                    # Add products to item result
-                    if products:
-                        print(f"[DEBUG] ✅ Adding {len(products)} products to results for '{search_query}'")
-                        for product in products:
-                            item_result['products'].append({
-                                'search_query': search_query,
-                                'product': product
-                            })
-                    else:
-                        print(f"[DEBUG] ❌ No results found for '{search_query}'.")
+                        if not products:
+                            print(f"[DEBUG] 🔄 Selenium failed, trying fallback method")
+                            products = fetch_myntra_products_fallback(search_query, num_results=2)
+                
+                # Add products to item result
+                if products:
+                    print(f"[DEBUG] ✅ Adding {len(products)} products to results for '{search_query}'")
+                    for product in products:
+                        item_result['products'].append({
+                            'search_query': search_query,
+                            'product': product
+                        })
+                else:
+                    print(f"[DEBUG] ❌ No results found for '{search_query}'.")
                 
                 # Add item result to category results if products were found
                 if item_result['products']:
