@@ -319,137 +319,86 @@ def fetch_myntra_products_selenium(query, num_results=2):
     return top_products
 
 def fetch_myntra_products_fallback(query, num_results=2):
-    """Fallback method using requests when Selenium fails"""
+    """Fallback method using requests with enhanced anti-detection measures"""
     url_query = query.replace(' ', '-')
     raw_query = query.replace(' ', '%20')
     url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
     print(f"[DEBUG] 🔄 Fallback: Fetching with requests for: '{query}' from {url}")
 
+    # Enhanced headers to mimic a real browser
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
         "DNT": "1",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
         "Cache-Control": "max-age=0",
-        "Referer": "https://www.google.com/"
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Referer": "https://www.google.com/",
+        "Cookie": "myntra_web_id=1234567890; myntra_web_session=abcdef123456; myntra_web_visitor=xyz789"
     }
+    
+    # Add random delay to mimic human behavior
+    time.sleep(random.uniform(2, 4))
     
     top_products = []
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        # Create a session to maintain cookies
+        session = requests.Session()
+        
+        # First, visit the homepage to get cookies
+        session.get("https://www.myntra.com/", headers=headers, timeout=10)
+        time.sleep(random.uniform(1, 2))
+        
+        # Then make the actual request
+        response = session.get(url, headers=headers, timeout=10)
         response.raise_for_status()
 
         html_content = response.text
         print(f"[DEBUG] 🔄 Fallback response length: {len(html_content)} characters")
         
-        # If we get the maintenance page, return mock data
-        if len(html_content) < 1000 or "maintenance" in html_content.lower():
-            print(f"[DEBUG] 🎭 Fallback detected blocking, using mock data")
-            return []
+        # If we get the maintenance page or blocked, try cloudscraper
+        if len(html_content) < 1000 or any(indicator in html_content.lower() for indicator in ["maintenance", "blocked", "captcha", "security check"]):
+            print(f"[DEBUG] 🔄 Fallback detected blocking, trying cloudscraper")
+            return fetch_myntra_products_cloudscraper(query, num_results)
         
-        # Try to extract products
-        product_names = re.findall(r'"productName":"(.*?)"', html_content)
-        image_urls = re.findall(r'"searchImage":"(.*?)"', html_content)
+        # Try to extract products using multiple methods
+        products_found = False
         
-        if product_names and image_urls:
-            count = 0
-            for product_name, img_url in zip(product_names, image_urls):
-                if count >= num_results:
-                    break
-                    
-                decoded_name = html.unescape(product_name).encode('utf-8').decode('unicode_escape')
-                decoded_url = html.unescape(img_url).encode('utf-8').decode('unicode_escape')
-
-                if decoded_url.startswith('http'):
-                    full_url = decoded_url
-                else:
-                    full_url = f"https://assets.myntassets.com/{decoded_url.lstrip('/')}"
-                    
-                top_products.append({"name": decoded_name, "image_url": full_url})
-                count += 1
-                print(f"[DEBUG] 🔄 Fallback found product: {decoded_name}")
+        # Method 1: Look for JSON data in script tags
+        script_pattern = r'<script type="application/json" id="__NEXT_DATA__">(.*?)</script>'
+        script_matches = re.findall(script_pattern, html_content, re.DOTALL)
         
-        # If no products found via regex, return mock data
-        if not top_products:
-            print(f"[DEBUG] 🎭 Fallback found no products, using mock data")
-            return []
-            
-    except Exception as e:
-        print(f"[DEBUG] 🔄 Fallback error: {e}, using mock data")
-        return []
-    
-    return top_products
-
-def fetch_myntra_products_cloudscraper(query, num_results=2):
-    """Fetches product details from Myntra using cloudscraper"""
-    url_query = query.replace(' ', '-')
-    raw_query = query.replace(' ', '%20')
-    url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
-    print(f"[DEBUG] 🌐 Cloudscraper fetching Myntra results for: '{query}' from {url}")
-    
-    top_products = []
-    
-    try:
-        # Create a cloudscraper session
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False
-            }
-        )
-        
-        # Set headers to mimic a real browser
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        }
-        
-        print(f"[DEBUG] 🚀 Sending request to Myntra...")
-        response = scraper.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        
-        html_content = response.text
-        print(f"[DEBUG] 📄 Response received, content length: {len(html_content)} characters")
-        
-        # Parse HTML with BeautifulSoup
-        soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # Method 1: Try to find product data in script tags
-        script_tags = soup.find_all('script', type='application/json')
-        for script in script_tags:
+        for script_content in script_matches:
             try:
-                data = json.loads(script.string)
-                if isinstance(data, dict) and 'products' in data:
-                    products = data['products']
-                    for product in products[:num_results]:
-                        if 'name' in product and 'image' in product:
-                            top_products.append({
-                                'name': product['name'],
-                                'image_url': product['image']
-                            })
-                    break
+                data = json.loads(script_content)
+                if 'props' in data and 'pageProps' in data['props']:
+                    products = data['props']['pageProps'].get('products', [])
+                    if products:
+                        for product in products[:num_results]:
+                            if 'name' in product and 'image' in product:
+                                top_products.append({
+                                    'name': product['name'],
+                                    'image_url': product['image']
+                                })
+                                products_found = True
+                        break
             except:
                 continue
         
-        # Method 2: If no products found in script tags, try direct HTML parsing
-        if not top_products:
-            product_elements = soup.select('[data-testid="product-base"]')
-            if not product_elements:
-                product_elements = soup.select('.product-base')
+        # Method 2: Look for product data in HTML
+        if not products_found:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            product_elements = soup.select('[data-testid="product-base"], .product-base')
             
             for element in product_elements[:num_results]:
                 try:
@@ -468,9 +417,163 @@ def fetch_myntra_products_cloudscraper(query, num_results=2):
                                 'name': name,
                                 'image_url': img_url
                             })
+                            products_found = True
                 except Exception as e:
                     print(f"[DEBUG] ⚠️ Error extracting product: {e}")
                     continue
+        
+        # If still no products found, try cloudscraper
+        if not products_found:
+            print(f"[DEBUG] 🔄 No products found with requests, trying cloudscraper")
+            return fetch_myntra_products_cloudscraper(query, num_results)
+            
+    except Exception as e:
+        print(f"[DEBUG] 🔄 Fallback error: {e}, trying cloudscraper")
+        return fetch_myntra_products_cloudscraper(query, num_results)
+    
+    return top_products
+
+def fetch_myntra_products_cloudscraper(query, num_results=2):
+    """Fetches product details from Myntra using cloudscraper with enhanced anti-detection"""
+    url_query = query.replace(' ', '-')
+    raw_query = query.replace(' ', '%20')
+    url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
+    print(f"[DEBUG] 🌐 Cloudscraper fetching Myntra results for: '{query}' from {url}")
+    
+    top_products = []
+    
+    try:
+        # Create a cloudscraper session with enhanced browser profile
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False,
+                'desktop': True
+            },
+            delay=10
+        )
+        
+        # Set enhanced headers
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Referer': 'https://www.google.com/'
+        }
+        
+        # Add random delay to mimic human behavior
+        time.sleep(random.uniform(2, 4))
+        
+        print(f"[DEBUG] 🚀 Sending request to Myntra...")
+        
+        # First visit homepage to get cookies
+        scraper.get("https://www.myntra.com/", headers=headers, timeout=30)
+        time.sleep(random.uniform(1, 2))
+        
+        # Then make the actual request
+        response = scraper.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        html_content = response.text
+        print(f"[DEBUG] 📄 Response received, content length: {len(html_content)} characters")
+        
+        # Check for blocking indicators
+        blocking_indicators = [
+            "site maintenance", "oops! something went wrong", 
+            "access denied", "blocked", "captcha", "security check"
+        ]
+        
+        if any(indicator in html_content.lower() for indicator in blocking_indicators):
+            print(f"[DEBUG] ⚠️ Blocking detected in cloudscraper response")
+            return get_mock_products(query, num_results)
+        
+        # Try multiple methods to extract products
+        products_found = False
+        
+        # Method 1: Look for JSON data in script tags
+        script_pattern = r'<script type="application/json" id="__NEXT_DATA__">(.*?)</script>'
+        script_matches = re.findall(script_pattern, html_content, re.DOTALL)
+        
+        for script_content in script_matches:
+            try:
+                data = json.loads(script_content)
+                if 'props' in data and 'pageProps' in data['props']:
+                    products = data['props']['pageProps'].get('products', [])
+                    if products:
+                        for product in products[:num_results]:
+                            if 'name' in product and 'image' in product:
+                                top_products.append({
+                                    'name': product['name'],
+                                    'image_url': product['image']
+                                })
+                                products_found = True
+                        break
+            except:
+                continue
+        
+        # Method 2: Parse HTML with BeautifulSoup
+        if not products_found:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Try multiple selectors
+            product_elements = soup.select('[data-testid="product-base"], .product-base, .results-item')
+            
+            for element in product_elements[:num_results]:
+                try:
+                    # Try multiple selectors for product name
+                    name_element = None
+                    name_selectors = [
+                        'h3', 'h4', '.product-product', 
+                        '[data-testid="product-name"]', '.product-name'
+                    ]
+                    
+                    for selector in name_selectors:
+                        name_element = element.select_one(selector)
+                        if name_element:
+                            break
+                    
+                    # Try multiple selectors for image
+                    img_element = None
+                    img_selectors = ['img', '.product-image img', 'picture img']
+                    
+                    for selector in img_selectors:
+                        img_element = element.select_one(selector)
+                        if img_element:
+                            break
+                    
+                    if name_element and img_element:
+                        name = name_element.text.strip()
+                        img_url = img_element.get('src') or img_element.get('data-src')
+                        
+                        if img_url:
+                            if not img_url.startswith('http'):
+                                img_url = f"https://assets.myntassets.com/{img_url.lstrip('/')}"
+                            
+                            top_products.append({
+                                'name': name,
+                                'image_url': img_url
+                            })
+                            products_found = True
+                except Exception as e:
+                    print(f"[DEBUG] ⚠️ Error extracting product: {e}")
+                    continue
+        
+        # If still no products found, return mock data
+        if not products_found:
+            print(f"[DEBUG] 🎭 No products found with cloudscraper, using mock data")
+            return get_mock_products(query, num_results)
         
         print(f"[DEBUG] ✅ Cloudscraper found {len(top_products)} products for '{query}'")
         
@@ -478,6 +581,7 @@ def fetch_myntra_products_cloudscraper(query, num_results=2):
         print(f"[DEBUG] ❌ Error in cloudscraper fetch for '{query}': {e}")
         import traceback
         print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return get_mock_products(query, num_results)
     
     return top_products
 
