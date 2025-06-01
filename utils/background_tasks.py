@@ -356,7 +356,7 @@ def fetch_myntra_products_fallback(query, num_results=2):
 def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
     """Processes recommendations and fetches top 2 Myntra products for each item."""
     global redis_client
-    # print("[Background Task] Starting recommendation processing...")
+    print("[Background Task] Starting sequential recommendation processing...")
     if not recommendations_data or 'recommendations' not in recommendations_data:
         print("[Background Task] No recommendations data found to process.")
         return
@@ -368,7 +368,7 @@ def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
             print(f"[Background Task] Skipping category '{category}' as its value is not a list.")
             continue
             
-        # print(f"[Background Task] Processing category: {category}")
+        print(f"[Background Task] Processing category: {category}")
         for item in items:
             try:
                 clothing_type = item.get('Clothing Type')
@@ -384,10 +384,10 @@ def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
                 for color in colors:
                     if color.lower() in clothing_type.lower():
                         search_query = f"{clothing_type} for {gender}"
-                        # print(f"\n[Background Task] Searching for: {search_query} (color already in type)")
+                        print(f"\n[Background Task] Searching for: {search_query} (color already in type)")
                     else:
                         search_query = f"{color} {clothing_type} for {gender}"
-                        # print(f"\n[Background Task] Searching for: {search_query}")
+                        print(f"\n[Background Task] Searching for: {search_query}")
 
                     # --- Check Cache First ---
                     cache_key = f"myntra:{search_query}"
@@ -398,7 +398,7 @@ def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
                         if cached_products is not None:
                             # Use cached results directly
                             products = cached_products
-                            # print(f"[Background Task] Using cached results for '{search_query}'.")
+                            print(f"[Background Task] Using cached results for '{search_query}'.")
                         else:
                             # Fetch from Myntra if not in cache
                             products = fetch_myntra_products_selenium(search_query, num_results=2)
@@ -406,25 +406,24 @@ def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
                             if products:
                                 set_cache(redis_client, cache_key, products)
                     else:
-                        # print("[Background Task] Redis client not available, skipping cache")
+                        print("[Background Task] Redis client not available, skipping cache")
                         products = fetch_myntra_products_selenium(search_query, num_results=2)
                     # --- End Cache Check ---
                         
                     if products:
-                        pass
-                        # print(f"[Background Task] Top {len(products)} results for '{search_query}':")
-                        # for i, product in enumerate(products, 1):
-                            # print(f"  {i}. Name: {product['name']}")
-                            # print(f"     Image: {product['image_url']}")
+                        print(f"[Background Task] Top {len(products)} results for '{search_query}':")
+                        for i, product in enumerate(products, 1):
+                            print(f"  {i}. Name: {product['name']}")
+                            print(f"     Image: {product['image_url']}")
                     else:
                         print(f"[Background Task] No results found for '{search_query}'.")
                         
             except Exception as e:
                 print(f"[Background Task] Error processing item {item}: {e}")
 
-    # print("[Background Task] Finished processing recommendations.")
+    print("[Background Task] Finished processing recommendations.")
 
-def get_recommendations_data(recommendations_data , gender="unisex"):
+def get_recommendations_data(recommendations_data, gender="unisex"):
     """
     Processes recommendations and fetches Myntra products for each item.
     Checks Redis cache first, scrapes if not available, and returns structured results.
@@ -432,7 +431,7 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
     global redis_client
     results = {}
     
-    print(f"[DEBUG] Starting get_recommendations_data with gender: {gender}")
+    print(f"[DEBUG] Starting sequential get_recommendations_data with gender: {gender}")
     print(f"[DEBUG] Redis client available: {redis_client is not None}")
     
     if not recommendations_data or 'recommendations' not in recommendations_data:
@@ -514,17 +513,17 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
                         if not products:
                             print(f"[DEBUG] 🔄 Selenium failed, trying fallback method")
                             products = fetch_myntra_products_fallback(search_query, num_results=2)
-                
-                # Add products to item result
-                if products:
-                    print(f"[DEBUG] ✅ Adding {len(products)} products to results for '{search_query}'")
-                    for product in products:
-                        item_result['products'].append({
-                            'search_query': search_query,
-                            'product': product
-                        })
-                else:
-                    print(f"[DEBUG] ❌ No results found for '{search_query}'.")
+                        
+                    # Add products to item result
+                    if products:
+                        print(f"[DEBUG] ✅ Adding {len(products)} products to results for '{search_query}'")
+                        for product in products:
+                            item_result['products'].append({
+                                'search_query': search_query,
+                                'product': product
+                            })
+                    else:
+                        print(f"[DEBUG] ❌ No results found for '{search_query}'.")
                 
                 # Add item result to category results if products were found
                 if item_result['products']:
@@ -558,8 +557,6 @@ if __name__ == "__main__":
             ]
         }
     }
-    # Run the processing in a separate thread like the main app would
-    thread = threading.Thread(target=process_recommendations_and_fetch, args=(example_data,))
-    thread.start()
-    thread.join() # Wait for the thread to finish in this example
-    print("Main thread finished.") 
+    # Run the processing sequentially
+    process_recommendations_and_fetch(example_data)
+    print("Processing finished.") 
