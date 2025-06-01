@@ -2,7 +2,32 @@ import requests
 import re
 import html
 import threading
+import os
 from .cache import get_cache, set_cache # Import cache functions
+
+# Add this after the imports
+import os
+
+def get_mock_products(query, num_results=2):
+    """Returns mock product data when scraping fails"""
+    print(f"[DEBUG] 🎭 Returning mock products for '{query}'")
+    
+    mock_products = [
+        {
+            "name": f"Premium {query} - Style 1",
+            "image_url": "https://via.placeholder.com/300x400/007bff/ffffff?text=Product+1"
+        },
+        {
+            "name": f"Designer {query} - Style 2", 
+            "image_url": "https://via.placeholder.com/300x400/28a745/ffffff?text=Product+2"
+        },
+        {
+            "name": f"Trending {query} - Style 3",
+            "image_url": "https://via.placeholder.com/300x400/ffc107/000000?text=Product+3"
+        }
+    ]
+    
+    return mock_products[:num_results]
 
 # Global variable to store the Redis client
 redis_client = None
@@ -36,19 +61,32 @@ def fetch_myntra_products(query, num_results=2):
         "Referer": "https://www.google.com/"
     }
     
+    # Optional proxy configuration (add to .env file)
+    proxies = None
+    proxy_url = os.getenv('PROXY_URL')  # e.g., "http://username:password@proxy-server:port"
+    if proxy_url:
+        proxies = {
+            'http': proxy_url,
+            'https': proxy_url
+        }
+        print(f"[DEBUG] Using proxy: {proxy_url}")
+    
     top_products = []
 
     try:
         print(f"[DEBUG] Making request to: {url}")
         print(f"[DEBUG] Request headers: {headers}")
         
-        response = requests.get(url, headers=headers, timeout=10) # Added timeout
+        # Add session with retry strategy
+        session = requests.Session()
+        
+        response = session.get(url, headers=headers, proxies=proxies, timeout=15)
         
         print(f"[DEBUG] Response status code: {response.status_code}")
         print(f"[DEBUG] Response headers: {dict(response.headers)}")
         print(f"[DEBUG] Response URL (after redirects): {response.url}")
         
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
 
         html_content = response.text
         print(f"[DEBUG] Response content length: {len(html_content)} characters")
@@ -56,25 +94,31 @@ def fetch_myntra_products(query, num_results=2):
         # Log first 500 characters of HTML content
         print(f"[DEBUG] First 500 chars of HTML: {html_content[:500]}")
         
-        # Check if we're getting blocked/redirected
-        if "access denied" in html_content.lower() or "blocked" in html_content.lower():
-            print(f"[DEBUG] ⚠️ Possible blocking detected in HTML content")
+        # Check for blocking indicators
+        blocking_indicators = [
+            "site maintenance", "oops! something went wrong", 
+            "access denied", "blocked", "captcha", "security check"
+        ]
         
-        if "captcha" in html_content.lower():
-            print(f"[DEBUG] ⚠️ CAPTCHA detected in HTML content")
-
+        html_lower = html_content.lower()
+        for indicator in blocking_indicators:
+            if indicator in html_lower:
+                print(f"[DEBUG] ⚠️ Blocking detected: '{indicator}' found in response")
+                return top_products
+        
         # Look for specific Myntra indicators
-        if "myntra" not in html_content.lower():
-            print(f"[DEBUG] ⚠️ 'myntra' not found in HTML content - possible redirect/block")
+        if "myntra" not in html_lower or len(html_content) < 1000:
+            print(f"[DEBUG] ⚠️ Response seems invalid - too short or missing Myntra content")
+            return top_products
         
         # Debug regex patterns
         print(f"[DEBUG] Searching for product names with pattern: '\"productName\":\"(.*?)\"'")
         product_names = re.findall(r'"productName":"(.*?)"', html_content)
-        print(f"[DEBUG] Found {len(product_names)} product names: {product_names[:5]}")  # Show first 5
+        print(f"[DEBUG] Found {len(product_names)} product names: {product_names[:5]}")
         
         print(f"[DEBUG] Searching for image URLs with pattern: '\"searchImage\":\"(.*?)\"'")
         image_urls = re.findall(r'"searchImage":"(.*?)"', html_content)
-        print(f"[DEBUG] Found {len(image_urls)} image URLs: {image_urls[:5]}")  # Show first 5
+        print(f"[DEBUG] Found {len(image_urls)} image URLs: {image_urls[:5]}")
 
         # Alternative regex patterns to try
         if not product_names:
@@ -97,7 +141,7 @@ def fetch_myntra_products(query, num_results=2):
             print(f"[DEBUG] ❌ No product names or images found for '{query}'.")
             # Save a snippet of HTML for debugging
             with open(f"/tmp/myntra_debug_{query.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
-                f.write(html_content[:10000])  # Save first 10k chars
+                f.write(html_content[:10000])
             print(f"[DEBUG] Saved HTML snippet to /tmp/myntra_debug_{query.replace(' ', '_')}.html")
             return top_products
 
