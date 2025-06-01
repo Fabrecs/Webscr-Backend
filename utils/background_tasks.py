@@ -3,6 +3,14 @@ import re
 import html
 import threading
 import os
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from webdriver_manager.chrome import ChromeDriverManager
 from .cache import get_cache, set_cache # Import cache functions
 
 # Add this after the imports
@@ -38,60 +46,66 @@ def set_redis_client(client):
     redis_client = client
     print(f"[Background Task] Redis client set: {redis_client is not None}")
 
-def fetch_myntra_products(query, num_results=2):
-    """Fetches product details from Myntra based on a query and returns top results."""
+def get_selenium_driver():
+    """Create and configure a Chrome WebDriver instance"""
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')  # Run in background
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    try:
+        # Auto-install ChromeDriver
+        driver_path = ChromeDriverManager().install()
+        driver = webdriver.Chrome(driver_path, options=chrome_options)
+        
+        # Execute script to remove automation flags
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        return driver
+    except Exception as e:
+        print(f"[DEBUG] ❌ Failed to create Selenium driver: {e}")
+        return None
+
+def fetch_myntra_products_selenium(query, num_results=2):
+    """Fetches product details from Myntra using Selenium WebDriver"""
     url_query = query.replace(' ', '-')
     raw_query = query.replace(' ', '%20')
     url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
-    print(f"[DEBUG] Fetching Myntra results for: '{query}' from {url}")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0",
-        "Referer": "https://www.google.com/"
-    }
+    print(f"[DEBUG] 🌐 Selenium fetching Myntra results for: '{query}' from {url}")
     
-    # Optional proxy configuration (add to .env file)
-    proxies = None
-    proxy_url = os.getenv('PROXY_URL')  # e.g., "http://username:password@proxy-server:port"
-    if proxy_url:
-        proxies = {
-            'http': proxy_url,
-            'https': proxy_url
-        }
-        print(f"[DEBUG] Using proxy: {proxy_url}")
-    
+    driver = None
     top_products = []
-
+    
     try:
-        print(f"[DEBUG] Making request to: {url}")
-        print(f"[DEBUG] Request headers: {headers}")
+        driver = get_selenium_driver()
+        if not driver:
+            print(f"[DEBUG] ❌ Could not create Selenium driver")
+            return top_products
         
-        # Add session with retry strategy
-        session = requests.Session()
+        print(f"[DEBUG] 🚀 Loading page with Selenium...")
+        driver.get(url)
         
-        response = session.get(url, headers=headers, proxies=proxies, timeout=15)
+        # Wait for page to load
+        time.sleep(3)
         
-        print(f"[DEBUG] Response status code: {response.status_code}")
-        print(f"[DEBUG] Response headers: {dict(response.headers)}")
-        print(f"[DEBUG] Response URL (after redirects): {response.url}")
+        # Wait for products to load (look for common Myntra elements)
+        try:
+            wait = WebDriverWait(driver, 10)
+            # Wait for either product grid or no results message
+            wait.until(lambda d: len(d.page_source) > 1000)
+        except TimeoutException:
+            print(f"[DEBUG] ⏰ Timeout waiting for page to load")
         
-        response.raise_for_status()
-
-        html_content = response.text
-        print(f"[DEBUG] Response content length: {len(html_content)} characters")
+        html_content = driver.page_source
+        print(f"[DEBUG] 📄 Page loaded, content length: {len(html_content)} characters")
         
-        # Log first 500 characters of HTML content
+        # Log first 500 characters
         print(f"[DEBUG] First 500 chars of HTML: {html_content[:500]}")
         
         # Check for blocking indicators
@@ -106,80 +120,111 @@ def fetch_myntra_products(query, num_results=2):
                 print(f"[DEBUG] ⚠️ Blocking detected: '{indicator}' found in response")
                 return top_products
         
-        # Look for specific Myntra indicators
-        if "myntra" not in html_lower or len(html_content) < 1000:
+        # Look for Myntra-specific content
+        if "myntra" not in html_lower or len(html_content) < 2000:
             print(f"[DEBUG] ⚠️ Response seems invalid - too short or missing Myntra content")
             return top_products
         
-        # Debug regex patterns
-        print(f"[DEBUG] Searching for product names with pattern: '\"productName\":\"(.*?)\"'")
-        product_names = re.findall(r'"productName":"(.*?)"', html_content)
-        print(f"[DEBUG] Found {len(product_names)} product names: {product_names[:5]}")
+        # Try multiple selectors for product data
+        print(f"[DEBUG] 🔍 Searching for products using CSS selectors...")
         
-        print(f"[DEBUG] Searching for image URLs with pattern: '\"searchImage\":\"(.*?)\"'")
-        image_urls = re.findall(r'"searchImage":"(.*?)"', html_content)
-        print(f"[DEBUG] Found {len(image_urls)} image URLs: {image_urls[:5]}")
-
-        # Alternative regex patterns to try
-        if not product_names:
-            print(f"[DEBUG] Trying alternative product name patterns...")
-            alt_product_names = re.findall(r'"name":"(.*?)"', html_content)
-            print(f"[DEBUG] Alternative pattern found {len(alt_product_names)} names: {alt_product_names[:5]}")
-            
-            title_pattern = re.findall(r'"title":"(.*?)"', html_content)
-            print(f"[DEBUG] Title pattern found {len(title_pattern)} titles: {title_pattern[:5]}")
-
-        if not image_urls:
-            print(f"[DEBUG] Trying alternative image URL patterns...")
-            alt_images = re.findall(r'"image":"(.*?)"', html_content)
-            print(f"[DEBUG] Alternative image pattern found {len(alt_images)} images: {alt_images[:5]}")
-            
-            src_pattern = re.findall(r'"src":"(.*?)"', html_content)
-            print(f"[DEBUG] Src pattern found {len(src_pattern)} sources: {src_pattern[:5]}")
-
-        if not product_names or not image_urls:
-            print(f"[DEBUG] ❌ No product names or images found for '{query}'.")
-            # Save a snippet of HTML for debugging
-            with open(f"/tmp/myntra_debug_{query.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
-                f.write(html_content[:10000])
-            print(f"[DEBUG] Saved HTML snippet to /tmp/myntra_debug_{query.replace(' ', '_')}.html")
-            return top_products
-
-        count = 0
-        for product_name, img_url in zip(product_names, image_urls):
-            if count >= num_results:
-                break
-                
-            print(f"[DEBUG] Processing product {count + 1}: '{product_name}' with image: '{img_url}'")
-            
-            decoded_name = html.unescape(product_name).encode('utf-8').decode('unicode_escape')
-            decoded_url = html.unescape(img_url).encode('utf-8').decode('unicode_escape')
-
-            print(f"[DEBUG] Decoded name: '{decoded_name}'")
-            print(f"[DEBUG] Decoded URL: '{decoded_url}'")
-
-            # Construct full image URL if necessary
-            if decoded_url.startswith('http'):
-                full_url = decoded_url
-            else:
-                full_url = f"https://assets.myntassets.com/{decoded_url.lstrip('/')}"
-            
-            print(f"[DEBUG] Final image URL: '{full_url}'")
-                
-            top_products.append({"name": decoded_name, "image_url": full_url})
-            count += 1
+        # Method 1: Look for product containers
+        product_elements = driver.find_elements(By.CSS_SELECTOR, "[data-testid='product-base']")
+        if not product_elements:
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".product-base")
+        if not product_elements:
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".results-item")
         
-        print(f"[DEBUG] ✅ Successfully found {len(top_products)} products for '{query}'")
+        print(f"[DEBUG] Found {len(product_elements)} product elements")
+        
+        # Method 2: Extract from JSON data in script tags
+        if not product_elements:
+            print(f"[DEBUG] 🔍 Trying regex extraction from page source...")
+            product_names = re.findall(r'"productName":"(.*?)"', html_content)
+            image_urls = re.findall(r'"searchImage":"(.*?)"', html_content)
             
-    except requests.exceptions.RequestException as e:
-        print(f"[DEBUG] ❌ RequestException for '{query}': {e}")
-        print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Regex found {len(product_names)} names, {len(image_urls)} images")
+            
+            if product_names and image_urls:
+                count = 0
+                for product_name, img_url in zip(product_names, image_urls):
+                    if count >= num_results:
+                        break
+                    
+                    decoded_name = html.unescape(product_name).encode('utf-8').decode('unicode_escape')
+                    decoded_url = html.unescape(img_url).encode('utf-8').decode('unicode_escape')
+                    
+                    if decoded_url.startswith('http'):
+                        full_url = decoded_url
+                    else:
+                        full_url = f"https://assets.myntassets.com/{decoded_url.lstrip('/')}"
+                    
+                    top_products.append({"name": decoded_name, "image_url": full_url})
+                    count += 1
+                    print(f"[DEBUG] ✅ Added product: {decoded_name}")
+        
+        # Method 3: Direct element extraction
+        else:
+            count = 0
+            for element in product_elements[:num_results]:
+                try:
+                    # Try multiple selectors for product name
+                    name_element = None
+                    name_selectors = [
+                        "h3", "h4", ".product-product", 
+                        "[data-testid='product-name']", ".product-name"
+                    ]
+                    
+                    for selector in name_selectors:
+                        try:
+                            name_element = element.find_element(By.CSS_SELECTOR, selector)
+                            break
+                        except:
+                            continue
+                    
+                    # Try multiple selectors for image
+                    img_element = None
+                    img_selectors = ["img", ".product-image img", "picture img"]
+                    
+                    for selector in img_selectors:
+                        try:
+                            img_element = element.find_element(By.CSS_SELECTOR, selector)
+                            break
+                        except:
+                            continue
+                    
+                    if name_element and img_element:
+                        name = name_element.text or name_element.get_attribute("title") or f"Product {count + 1}"
+                        img_url = img_element.get_attribute("src") or img_element.get_attribute("data-src")
+                        
+                        if img_url:
+                            if not img_url.startswith('http'):
+                                img_url = f"https://assets.myntassets.com/{img_url.lstrip('/')}"
+                            
+                            top_products.append({"name": name, "image_url": img_url})
+                            count += 1
+                            print(f"[DEBUG] ✅ Added product: {name}")
+                
+                except Exception as e:
+                    print(f"[DEBUG] ⚠️ Error extracting product {count}: {e}")
+                    continue
+        
+        print(f"[DEBUG] ✅ Selenium found {len(top_products)} products for '{query}'")
+        
+    except WebDriverException as e:
+        print(f"[DEBUG] ❌ WebDriver error for '{query}': {e}")
     except Exception as e:
-        print(f"[DEBUG] ❌ Unexpected error for '{query}': {e}")
-        print(f"[DEBUG] Exception type: {type(e).__name__}")
+        print(f"[DEBUG] ❌ Unexpected error in Selenium fetch for '{query}': {e}")
         import traceback
         print(f"[DEBUG] Traceback: {traceback.format_exc()}")
-        
+    finally:
+        if driver:
+            try:
+                driver.quit()
+                print(f"[DEBUG] 🔌 Selenium driver closed")
+            except Exception as e:
+                print(f"[DEBUG] ⚠️ Error closing driver: {e}")
+    
     return top_products
 
 def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
@@ -230,13 +275,13 @@ def process_recommendations_and_fetch(recommendations_data, gender="unisex"):
                             # print(f"[Background Task] Using cached results for '{search_query}'.")
                         else:
                             # Fetch from Myntra if not in cache
-                            products = fetch_myntra_products(search_query, num_results=2)
+                            products = fetch_myntra_products_selenium(search_query, num_results=2)
                             # Cache the results if found
                             if products:
                                 set_cache(redis_client, cache_key, products)
                     else:
                         # print("[Background Task] Redis client not available, skipping cache")
-                        products = fetch_myntra_products(search_query, num_results=2)
+                        products = fetch_myntra_products_selenium(search_query, num_results=2)
                     # --- End Cache Check ---
                         
                     if products:
@@ -323,7 +368,7 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
                         else:
                             print(f"[DEBUG] 💨 Cache MISS for '{search_query}' - fetching from Myntra")
                             # Fetch from Myntra if not in cache
-                            products = fetch_myntra_products(search_query, num_results=2)
+                            products = fetch_myntra_products_selenium(search_query, num_results=2)
                             # Cache the results if found
                             if products:
                                 print(f"[DEBUG] 💾 Caching {len(products)} products for '{search_query}'")
@@ -333,7 +378,7 @@ def get_recommendations_data(recommendations_data , gender="unisex"):
                     else:
                         print(f"[DEBUG] ⚠️ Redis client not available, fetching without cache")
                         # Fetch without cache
-                        products = fetch_myntra_products(search_query, num_results=2)
+                        products = fetch_myntra_products_selenium(search_query, num_results=2)
                         
                     # Add products to item result
                     if products:
