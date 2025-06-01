@@ -19,6 +19,8 @@ import json
 from bs4 import BeautifulSoup
 import asyncio
 from playwright.async_api import async_playwright
+from pyppeteer import launch
+from pyppeteer.errors import TimeoutError
 
 # Add this after the imports
 import os
@@ -1065,6 +1067,196 @@ async def get_recommendations_data_async(recommendations_data, gender="unisex"):
         print(f"[DEBUG]   - {cat}: {len(items)} items with products")
     
     return results
+
+async def fetch_myntra_products_pyppeteer(query, num_results=2):
+    """Fetches product details from Myntra using Pyppeteer (Python port of Puppeteer)"""
+    url_query = query.replace(' ', '-')
+    raw_query = query.replace(' ', '%20')
+    url = f"https://www.myntra.com/{url_query}?rawQuery={raw_query}"
+    print(f"[DEBUG] 🌐 Pyppeteer fetching Myntra results for: '{query}' from {url}")
+    
+    top_products = []
+    browser = None
+    
+    try:
+        # Launch browser with stealth mode
+        browser = await launch({
+            'headless': True,
+            'args': [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--window-size=1920,1080',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--disable-notifications',
+                '--disable-extensions',
+                '--disable-popup-blocking',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+            ],
+            'ignoreHTTPSErrors': True,
+            'defaultViewport': {
+                'width': 1920,
+                'height': 1080
+            }
+        })
+        
+        # Create a new page
+        page = await browser.newPage()
+        
+        # Set user agent and other headers
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        await page.setExtraHTTPHeaders({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Referer': 'https://www.google.com/'
+        })
+        
+        # Add script to remove webdriver flags
+        await page.evaluateOnNewDocument("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            window.chrome = {
+                runtime: {}
+            };
+        """)
+        
+        # Add random delay to mimic human behavior
+        await asyncio.sleep(random.uniform(2, 4))
+        
+        print(f"[DEBUG] 🚀 Loading page with Pyppeteer...")
+        
+        # First visit homepage to get cookies
+        await page.goto('https://www.myntra.com/', {'waitUntil': 'networkidle0', 'timeout': 30000})
+        await asyncio.sleep(random.uniform(1, 2))
+        
+        # Then visit the search page
+        await page.goto(url, {'waitUntil': 'networkidle0', 'timeout': 30000})
+        
+        # Wait for content to load
+        await page.waitForSelector('[data-testid="product-base"], .product-base', {'timeout': 5000})
+        await asyncio.sleep(3)  # Additional wait for dynamic content
+        
+        # Check for blocking indicators
+        content = await page.content()
+        blocking_indicators = [
+            "site maintenance", "oops! something went wrong", 
+            "access denied", "blocked", "captcha", "security check"
+        ]
+        
+        if any(indicator in content.lower() for indicator in blocking_indicators):
+            print(f"[DEBUG] ⚠️ Blocking detected in Pyppeteer response")
+            return get_mock_products(query, num_results)
+        
+        # Try multiple methods to extract products
+        products_found = False
+        
+        # Method 1: Extract from page content
+        try:
+            product_elements = await page.querySelectorAll('[data-testid="product-base"], .product-base')
+            
+            for element in product_elements[:num_results]:
+                try:
+                    # Get product name
+                    name_element = await element.querySelector('h3, h4, .product-product, [data-testid="product-name"]')
+                    name = await page.evaluate('(element) => element.textContent', name_element) if name_element else None
+                    
+                    # Get product image
+                    img_element = await element.querySelector('img')
+                    img_url = await page.evaluate('(element) => element.src', img_element) if img_element else None
+                    
+                    if name and img_url:
+                        if not img_url.startswith('http'):
+                            img_url = f"https://assets.myntassets.com/{img_url.lstrip('/')}"
+                        
+                        top_products.append({
+                            'name': name.strip(),
+                            'image_url': img_url
+                        })
+                        products_found = True
+                        print(f"[DEBUG] ✅ Added product: {name}")
+                except Exception as e:
+                    print(f"[DEBUG] ⚠️ Error extracting product: {e}")
+                    continue
+        except Exception as e:
+            print(f"[DEBUG] ⚠️ Error in product extraction: {e}")
+        
+        # Method 2: Extract from JSON data
+        if not products_found:
+            try:
+                # Look for JSON data in script tags
+                script_content = await page.evaluate("""
+                    () => {
+                        const scripts = document.querySelectorAll('script[type="application/json"]');
+                        for (const script of scripts) {
+                            try {
+                                const data = JSON.parse(script.textContent);
+                                if (data && data.props && data.props.pageProps && data.props.pageProps.products) {
+                                    return JSON.stringify(data.props.pageProps.products);
+                                }
+                            } catch (e) {}
+                        }
+                        return null;
+                    }
+                """)
+                
+                if script_content:
+                    products = json.loads(script_content)
+                    for product in products[:num_results]:
+                        if 'name' in product and 'image' in product:
+                            top_products.append({
+                                'name': product['name'],
+                                'image_url': product['image']
+                            })
+                            products_found = True
+                            print(f"[DEBUG] ✅ Added product from JSON: {product['name']}")
+            except Exception as e:
+                print(f"[DEBUG] ⚠️ Error extracting JSON data: {e}")
+        
+        # If still no products found, return mock data
+        if not products_found:
+            print(f"[DEBUG] 🎭 No products found with Pyppeteer, using mock data")
+            return get_mock_products(query, num_results)
+        
+        print(f"[DEBUG] ✅ Pyppeteer found {len(top_products)} products for '{query}'")
+        
+    except Exception as e:
+        print(f"[DEBUG] ❌ Error in Pyppeteer fetch for '{query}': {e}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return get_mock_products(query, num_results)
+    
+    finally:
+        if browser:
+            await browser.close()
+            print(f"[DEBUG] 🔌 Pyppeteer browser closed")
+    
+    return top_products
+
+def fetch_myntra_products_pyppeteer_sync(query, num_results=2):
+    """Synchronous wrapper for the async Pyppeteer function"""
+    return asyncio.run(fetch_myntra_products_pyppeteer(query, num_results))
 
 # Example usage (optional, for testing)
 if __name__ == "__main__":
