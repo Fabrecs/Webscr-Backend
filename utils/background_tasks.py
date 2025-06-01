@@ -2,7 +2,7 @@ import requests
 import re
 import html
 import threading
-import os
+import tempfile
 import time
 import random
 from selenium import webdriver
@@ -58,6 +58,19 @@ def get_selenium_driver():
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
+    # Explicitly disable user data directory
+    chrome_options.add_argument(f'--user-data-dir={tempfile.mkdtemp()}')
+    chrome_options.add_argument('--no-first-run')
+    chrome_options.add_argument('--no-default-browser-check')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-popup-blocking')
+    chrome_options.add_argument('--disable-infobars')
+    chrome_options.add_argument('--disable-notifications')
+    chrome_options.add_argument('--disable-save-password-bubble')
+    chrome_options.add_argument('--disable-translate')
+    chrome_options.add_argument('--disable-features=TranslateUI')
+    chrome_options.add_argument('--disable-features=site-per-process')
+    
     # Use remote debugging with unique port to avoid conflicts
     port = random.randint(9222, 9999)
     chrome_options.add_argument(f'--remote-debugging-port={port}')
@@ -71,7 +84,6 @@ def get_selenium_driver():
     chrome_options.add_argument('--disable-background-timer-throttling')
     chrome_options.add_argument('--disable-backgrounding-occluded-windows')
     chrome_options.add_argument('--disable-renderer-backgrounding')
-    chrome_options.add_argument('--disable-features=TranslateUI')
     chrome_options.add_argument('--disable-ipc-flooding-protection')
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--disable-web-security')
