@@ -51,7 +51,7 @@ def set_redis_client(client):
 def get_selenium_driver():
     """Create and configure a Chrome WebDriver instance"""
     chrome_options = Options()
-    chrome_options.add_argument('--headless=new') # Use new headless mode
+    chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
@@ -62,14 +62,6 @@ def get_selenium_driver():
     port = random.randint(9222, 9999)
     chrome_options.add_argument(f'--remote-debugging-port={port}')
     
-    # Specify a unique user data directory
-    # Option 1: Using tempfile (recommended for proper cleanup by OS or manually)
-    # user_data_path = tempfile.mkdtemp(prefix='chrome_user_data_') 
-    # Option 2: Simpler random path (ensure /tmp is writable and cleaned periodically)
-    user_data_path = f"/tmp/chrome_user_data_{random.randint(10000, 99999)}"
-    chrome_options.add_argument(f'--user-data-dir={user_data_path}')
-    print(f"[DEBUG] 👤 Using unique user data directory: {user_data_path}")
-
     # Disable automation detection
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -81,8 +73,7 @@ def get_selenium_driver():
     chrome_options.add_argument('--disable-renderer-backgrounding')
     chrome_options.add_argument('--disable-features=TranslateUI')
     chrome_options.add_argument('--disable-ipc-flooding-protection')
-    chrome_options.add_argument('--disable-logging') # Reduces log verbosity, but might hide some issues
-    chrome_options.add_argument('--log-level=3') # Further reduce logging
+    chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--disable-web-security')
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument('--ignore-ssl-errors')
@@ -90,13 +81,11 @@ def get_selenium_driver():
     
     # Memory options
     chrome_options.add_argument('--memory-pressure-off')
-    # chrome_options.add_argument('--max_old_space_size=4096') # This is a V8 engine flag, usually for Node.js.
-                                                            # For Chrome, consider resource limits at the OS level.
-
+    
     # Explicitly set Chrome binary location
     chrome_options.binary_location = "/usr/bin/google-chrome-stable"
     
-    driver = None # Initialize driver to None
+    driver = None
     try:
         print(f"[DEBUG] 🔧 Setting up ChromeDriver...")
         
@@ -118,7 +107,6 @@ def get_selenium_driver():
         print(f"[DEBUG] ❌ Failed to create Selenium driver: {e}")
         import traceback
         print(f"[DEBUG] Traceback: {traceback.format_exc()}")
-        # If driver was partially created and an error occurred, try to quit it.
         if driver:
             try:
                 driver.quit()
